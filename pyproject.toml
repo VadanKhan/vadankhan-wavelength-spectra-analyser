@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "vadankhan-wavelength-spectra-analyser"
+version = "0.1.0"
+description = ""
+authors = ["VadanKhan <vadankhan1@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pandas = "^2.2.3"
+numpy = "^2.2.4"
+matplotlib = "^3.10.1"
+scipy = "^1.15.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
