@@ -1,4 +1,5 @@
 wavelength_spectra_files/
 exports/
 decoders/
+monitored_folder/
 .venv/
