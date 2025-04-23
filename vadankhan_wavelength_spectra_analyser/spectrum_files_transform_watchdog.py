@@ -41,7 +41,7 @@ EXPORTS_FILE_PATH.mkdir(parents=True, exist_ok=True)
 sys.path.append(str(ROOT_DIR))
 
 
-ANALYSIS_RUN_NAME = "peak_detection_optimising"
+ANALYSIS_RUN_NAME = "debug-watchdog-script"
 
 SUBARU_DECODER = "QC WAFER_LAYOUT 24Dec.csv"
 HALO_DECODER = "HALO_DECODER_NE-rev1_1 logic_coords_annotated.csv"
@@ -354,6 +354,8 @@ class WaferFileHandler(FileSystemEventHandler):
 
         # Call Spectra Processing
         initialise_spectra_processing(wafer_code, detection_time, file_path)
+
+        print(f"\n\nWatching folder: {monitored_folder}")
 
 
 # Watchdog setup
