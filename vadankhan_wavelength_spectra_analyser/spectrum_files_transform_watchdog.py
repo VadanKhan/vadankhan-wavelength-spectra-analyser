@@ -7,6 +7,7 @@ import csv
 import io
 import re
 from datetime import datetime
+import threading
 
 # import threading
 # import multiprocessing
@@ -64,7 +65,9 @@ def load_decoder(decoder_file_path):
     return df_decoder
 
 
-def transform_raw_file(filepath, wafer_id, decoder_df, wavelength_lb=824, wavelength_ub=832, chunksize=1000, max_chunks=10):
+def transform_raw_file(
+    filepath, wafer_id, decoder_df, wavelength_lb=824, wavelength_ub=832, chunksize=1000, max_chunks=10
+):
     print(f"Starting file transformation for {wafer_id}...")
     total_t0 = time.time()
 
@@ -86,7 +89,9 @@ def transform_raw_file(filepath, wafer_id, decoder_df, wavelength_lb=824, wavele
 
             # Base transformation
             t_base = time.time()
-            long_df = chunk.melt(id_vars=["X", "Y"], value_vars=selected_intensity_cols, var_name="Wavelength", value_name="Intensity")
+            long_df = chunk.melt(
+                id_vars=["X", "Y"], value_vars=selected_intensity_cols, var_name="Wavelength", value_name="Intensity"
+            )
             long_df["Wavelength"] = long_df["Wavelength"].map(wavelengths)
             long_df = long_df.merge(decoder_df, left_on=["X", "Y"], right_index=True, how="left")
             long_df = long_df.drop(columns=["X", "Y"])
@@ -186,7 +191,15 @@ def process_export_and_peaks(filepath, wafer_code, decoder_df):
     chunk_counter = 0
 
     spectra_columns = ["TYPE", "TE_LABEL", "Wavelength", "Intensity", "dB_Intensity"]
-    peak_columns = ["Highest Peak (Wavelength)", "Highest Peak (Linear Intensity)", "Second Peak (Wavelength)", "Second Peak (Linear Intensity)", "SMSR_dB", "SMSR_linear", "TE_LABEL"]
+    peak_columns = [
+        "Highest Peak (Wavelength)",
+        "Highest Peak (Linear Intensity)",
+        "Second Peak (Wavelength)",
+        "Second Peak (Linear Intensity)",
+        "SMSR_dB",
+        "SMSR_linear",
+        "TE_LABEL",
+    ]
 
     with open(spectra_output_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -280,23 +293,52 @@ def process_export_and_peaks(filepath, wafer_code, decoder_df):
 monitored_folder = ROOT_DIR / "monitored_folder"
 log_path = monitored_folder / "detection_log.txt"
 
-print(f"Watching folder: {monitored_folder}")
+print(f"# --------------------------- LIV Automatic Spectra Analyser (Vadan Khan) v1.1 -------------------------- #")
+print("(Do not close this command window)")
+print(f"\nWatching folder: {monitored_folder}")
 
 
-# Updated wafer code extractor
-def extract_wafer_code(filename):
-    match = re.search(r"(QC|QD|NV)[A-Z0-9]{3}", filename.upper())
-    return match.group(0) if match else None
+# Updated wafer code extractor from LIV CSV filename
+def extract_testinfo_from_liv(folder_path):
+    for file in Path(folder_path).iterdir():
+        if file.name.startswith("LIV_") and file.suffix == ".csv":
+            parts = file.name.split("_")
+            if len(parts) >= 3:
+                tool_name = parts[0] + "_" + parts[1]  # e.g., LIV_53
+                wafer_code = parts[2]  # e.g., QCI44
+
+                # Search for COD variants in the entire filename
+                filename_upper = file.name.upper()
+                if "COD250" in filename_upper:
+                    test_type = "COD250"
+                elif "COD70" in filename_upper:
+                    test_type = "COD70"
+                elif "COD" in filename_upper:
+                    test_type = "COD"
+                else:
+                    test_type = "UNKNOWN"
+
+                return tool_name, wafer_code, test_type
+    return None, None, None
 
 
-# Wait until file is readable (not still being written)
-def wait_for_file(filepath, retries=60, delay=1):
-    for attempt in range(retries):
+# Combined wait: wait for file to appear and become readable, MAX WAIT 300s
+def wait_for_file_to_appear_and_be_readable(filepath, max_wait=300, delay=1):
+    wait_time = 0
+    while not filepath.exists() and wait_time < max_wait:
+        print(f"Waiting for {filepath.name} to appear... ({wait_time}s elapsed)")
+        time.sleep(delay)
+        wait_time += delay
+
+    if not filepath.exists():
+        return False
+
+    for attempt in range(max_wait):
         try:
             with open(filepath, "rb"):
                 return True
-        except PermissionError:
-            print(f"Waiting for file to be ready... (attempt {attempt + 1})")
+        except (PermissionError, FileNotFoundError):
+            print(f"Waiting for {filepath.name} to be ready... ({attempt}s elapsed)")
             time.sleep(delay)
     return False
 
@@ -328,34 +370,48 @@ def initialise_spectra_processing(wafer_code, detection_time, file_path):
             log_file.write(f"[{detection_time}] ❌ {message}\n")
 
 
-# Handler for new files
+# Handler for new **folders**
 class WaferFileHandler(FileSystemEventHandler):
     def on_created(self, event):
-        if event.is_directory or not event.src_path.endswith(".csv"):
+        if not event.is_directory:
             return
 
-        file_path = Path(event.src_path)
-        detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        def analysis_job():
+            folder_path = Path(event.src_path)
+            detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Log detection immediately
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{detection_time}] Detected new file: {file_path.name}\n")
-
-        print(f"\nDetected new file: {file_path.name}")
-
-        if not wait_for_file(file_path):
-            message = f"File never became readable. Skipping: {file_path.name}"
-            print(message)
             with open(log_path, "a", encoding="utf-8") as log_file:
-                log_file.write(f"[{detection_time}] {message}\n")
-            return
+                log_file.write(f"[{detection_time}] Detected new folder: {folder_path.name}\n")
 
-        wafer_code = extract_wafer_code(file_path.name)
+            print(f"\nDetected new wafer folder: {folder_path.name}")
 
-        # Call Spectra Processing
-        initialise_spectra_processing(wafer_code, detection_time, file_path)
+            raw_csv_path = folder_path / "0_LIV_Pulse_Interval_Opt" / "Raw.csv"
 
-        print(f"\n\nWatching folder: {monitored_folder}")
+            if not wait_for_file_to_appear_and_be_readable(
+                raw_csv_path
+            ):  # Function that Waits to only read when file fully copied over
+                message = f"Raw.csv did not appear or never became readable in: {folder_path.name}"
+                print(message)
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{detection_time}] ❌ {message}\n")
+                return
+
+            tool_name, wafer_code, test_type = extract_testinfo_from_liv(folder_path)
+            print(f"Detected Tool: {tool_name}, Wafer Code: {wafer_code}, Test Type: {test_type}")
+
+            if test_type in ("COD70", "COD250"):
+                message = f"Skipping analysis for test type {test_type} in: {folder_path.name}"
+                print(message)
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{detection_time}] ⚠️ {message}\n")
+                print(f"\n\nWatching folder: {monitored_folder}")
+                return
+
+            initialise_spectra_processing(wafer_code, detection_time, raw_csv_path)
+            print(f"\n\nWatching folder: {monitored_folder}")
+
+        # Run the job in a background thread so Ctrl+C can still work
+        threading.Thread(target=analysis_job, daemon=True).start()
 
 
 # Watchdog setup
